@@ -30,7 +30,7 @@
 <body>
 <h1>Talk to a video — V-JEPA2 + Whisper + Llama 3.2 1B (q4f16) on WebGPU</h1>
 <p class="small">
-  Vision: <a href="https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX">V-JEPA2 ViT-L diving48</a> (fp16, ~720 MB).
+  Vision: <a href="https://huggingface.co/facebook/vjepa2-vitl-fpc16-256-ssv2">V-JEPA2 ViT-L fpc16 SSV2</a> — 174 generic action categories (fp16, ~720 MB).
   ASR: <a href="https://huggingface.co/Xenova/whisper-base">Whisper base</a> (q8, ~150 MB).
   LLM: <a href="https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC">Llama 3.2 1B Instruct</a> (q4f16, ~700 MB).
   All weights cached in IndexedDB after first load.
@@ -73,7 +73,7 @@ const setStatus = (which, txt, cls) => { const el=$('status-'+which); el.textCon
 
 if (!('gpu' in navigator)) { setPhase('WebGPU not available'); throw new Error('no webgpu') }
 
-const NUM_FRAMES = 32, SIZE = 256, RESIZE_SHORT = 292
+const NUM_FRAMES = 16, SIZE = 256, RESIZE_SHORT = 292
 const MEAN = [0.485, 0.456, 0.406], STD = [0.229, 0.224, 0.225]
 
 const visionWorker = new Worker('./worker-vision.js', { type: 'module' })
@@ -207,7 +207,7 @@ $('analyze').onclick = async () => {
     const visionLines = vision.labels.map(l => `- ${l.label} (${(l.prob*100).toFixed(1)}%)`).join('\n')
     const ctx = `You are an assistant analyzing a short video. Two automatic models gave you grounded observations:
 
-VISION (V-JEPA2 finetuned on Diving48 — top action predictions across 32 sampled frames):
+VISION (V-JEPA2 finetuned on Something-Something V2 — top action predictions across 16 sampled frames; categories are generic templates like "moving X up", "putting X into Y"):
 ${visionLines}
 
 AUDIO (Whisper transcript):

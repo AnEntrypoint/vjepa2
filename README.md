@@ -8,7 +8,7 @@ Browser-only demo: pick a video, get visual action predictions + a speech transc
 
 | Role   | Model | Size | Source |
 |--------|-------|------|--------|
-| Vision | V-JEPA2 ViT-L finetuned on Diving48, fp16 ONNX | ~720 MB | This repo's GH release `model-fp16-v1` (built from [`onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX`](https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX)) |
+| Vision | V-JEPA2 ViT-L finetuned on Something-Something V2 (174 generic action templates), fp16 ONNX, **16 frames** | ~720 MB | This repo's GH release `model-fp16-ssv2-v1` (CI exports [`facebook/vjepa2-vitl-fpc16-256-ssv2`](https://huggingface.co/facebook/vjepa2-vitl-fpc16-256-ssv2) → ONNX → fp16) |
 | ASR    | Whisper base, q8 ONNX | ~150 MB | [`Xenova/whisper-base`](https://huggingface.co/Xenova/whisper-base) via `@huggingface/transformers` |
 | LLM    | Llama 3.2 1B Instruct, q4f16_1 | ~700 MB | [`mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC`](https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC) via `@mlc-ai/web-llm` |
 
@@ -20,12 +20,12 @@ V-JEPA2 is a video encoder, not a multimodal LLM. There is no trained projector 
 
 So we keep this honest and browser-feasible by **bridging through text**:
 
-1. V-JEPA2 (Diving48 head) classifies 32 uniformly sampled frames, producing top-5 class predictions with probabilities.
+1. V-JEPA2 (SSV2 head) classifies 16 uniformly sampled frames, producing top-5 class predictions with probabilities. SSV2's 174 categories are generic action templates ("moving X up", "putting X into Y", "pretending to pick up X") that compose well over arbitrary handheld/everyday video — not just one domain.
 2. Whisper transcribes the audio track.
 3. Both are injected as a single `system` message into Llama 3.2 1B.
 4. The user chats; Llama answers grounded in those observations.
 
-This means the chat is only as good as the action labels (Diving48 has 48 categories — somersaults, twists, body positions). For non-diving footage you'll get nonsense action labels, but the audio transcript still works and Llama knows to say it can't tell.
+SSV2 was picked over Diving48 for breadth (174 generic actions vs. 48 dive-specific labels) and over UCF101 / Kinetics finetunes because it's the smallest variant we have a clean export for and runs at 16 frames, halving activation VRAM and inference time vs. fpc32.
 
 ## VRAM
 
@@ -60,5 +60,5 @@ Requires Chrome/Edge with WebGPU (or Firefox with `dom.webgpu.enabled`, Safari T
 
 ## Vision inputs / outputs
 
-- Input: `[1, 32, 3, 256, 256]` fp16, ImageNet-normalized, 32 frames sampled uniformly across video duration.
-- Output: `[1, 48]` logits over Diving48 classes; softmax + top-5 for the chat context.
+- Input: `[1, 16, 3, 256, 256]` fp16, ImageNet-normalized, 16 frames sampled uniformly across video duration.
+- Output: `[1, 174]` logits over SSV2 classes; softmax + top-5 for the chat context.

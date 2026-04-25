@@ -1,4 +1,4 @@
-name: build-fp16-model
+name: build-fp16-ssv2
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - scripts/convert_fp16.py
+      - scripts/export_ssv2.py
       - .github/workflows/build-fp16.yml
 
 permissions:
@@ -23,15 +24,14 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install --quiet huggingface_hub hf_transfer onnx onnxconverter-common
+          pip install --quiet "transformers>=4.53.0" "torch>=2.4" "optimum[exporters]" onnx onnxconverter-common huggingface_hub hf_transfer
 
-      - name: Download fp32 ONNX
+      - name: Export ViT-L fpc16 SSV2 to ONNX
         env:
           HF_HUB_ENABLE_HF_TRANSFER: '1'
         run: |
           mkdir -p models
-          hf download onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX onnx/model.onnx --local-dir models_dl
-          mv models_dl/onnx/model.onnx models/model.onnx
+          python scripts/export_ssv2.py
           ls -la models/
 
       - name: Convert to fp16
@@ -41,18 +41,19 @@ jobs:
 
       - name: Fetch configs
         run: |
-          curl -sL -o models/config.json https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/resolve/main/config.json
-          curl -sL -o models/video_preprocessor_config.json https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/resolve/main/video_preprocessor_config.json
+          curl -sL -o models/config.json https://huggingface.co/facebook/vjepa2-vitl-fpc16-256-ssv2/resolve/main/config.json
+          curl -sL -o models/video_preprocessor_config.json https://huggingface.co/facebook/vjepa2-vitl-fpc16-256-ssv2/resolve/main/video_preprocessor_config.json
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: model-fp16-v1
-          name: V-JEPA2 ViT-L diving48 fp16
+          tag_name: model-fp16-ssv2-v1
+          name: V-JEPA2 ViT-L fpc16 SSV2 fp16
           body: |
-            fp16 conversion of `onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/onnx/model.onnx`.
-            Converted with `onnxconverter-common.float16.convert_float_to_float16` (keep_io_types=false).
-            Use the fp16 model directly in onnxruntime-web with the WebGPU EP.
+            fp16 ONNX export of `facebook/vjepa2-vitl-fpc16-256-ssv2`.
+            174-class Something-Something V2 head, 16 frames per clip, 256x256 input.
+            Exported via the model's own `torch.onnx` export then converted with
+            `onnxconverter-common.float16.convert_float_to_float16(keep_io_types=False)`.
           files: |
             models/model.fp16.onnx
             models/config.json

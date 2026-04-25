@@ -2,7 +2,7 @@ import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/o
 
 ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/'
 
-const RELEASE = 'https://github.com/AnEntrypoint/vjepa2/releases/download/model-fp16-v1'
+const RELEASE = 'https://github.com/AnEntrypoint/vjepa2/releases/download/model-fp16-ssv2-v1'
 const MODEL_URL = `${RELEASE}/model.fp16.onnx`
 const CONFIG_URL = `${RELEASE}/config.json`
 
