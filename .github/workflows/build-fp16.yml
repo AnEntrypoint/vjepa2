@@ -24,7 +24,7 @@ jobs:
 
       - name: Install deps
         run: |
-          pip install --quiet "transformers>=4.53.0" "torch>=2.4" "optimum[exporters]" onnx onnxconverter-common huggingface_hub hf_transfer
+          pip install --quiet "transformers>=4.53.0" "torch>=2.4" onnx onnxscript onnxconverter-common huggingface_hub hf_transfer
 
       - name: Export ViT-L fpc16 SSV2 to ONNX
         env:

@@ -13,3 +13,4 @@ rs-learn.db
 .codeinsight
 *.stackdump
 .claude/
+config.bat
