@@ -1,22 +1,40 @@
-# V-JEPA2 ViT-L (diving48) — WebGPU demo
+# Talk to a video — V-JEPA2 + Whisper + Llama 3.2 on WebGPU
 
-Browser-only video-classification demo. Runs Meta's V-JEPA2 ViT-L finetuned on Diving48 directly on the GPU via `onnxruntime-web` + WebGPU.
+Browser-only demo: pick a video, get visual action predictions + a speech transcript, then chat about the video with a local Llama 3.2 1B. Everything runs on WebGPU. Nothing leaves the browser.
 
-**Live page:** https://anentrypoint.github.io/vjepa2/ (after Pages enabled)
-**Source model:** [`onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX`](https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX)
+**Live page:** https://anentrypoint.github.io/vjepa2/ (once Pages is enabled)
 
-## Why this variant
+## Models
 
-Of the 86 V-JEPA2 models on HF, this is the only one with a published ONNX export, which means zero conversion friction for `onnxruntime-web`. ViT-L (~0.4B params) is the smallest tier with an ONNX build — ViT-H (0.7B) and ViT-g (1B) would blow past WebGPU buffer limits.
+| Role   | Model | Size | Source |
+|--------|-------|------|--------|
+| Vision | V-JEPA2 ViT-L finetuned on Diving48, fp16 ONNX | ~720 MB | This repo's GH release `model-fp16-v1` (built from [`onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX`](https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX)) |
+| ASR    | Whisper base, q8 ONNX | ~150 MB | [`Xenova/whisper-base`](https://huggingface.co/Xenova/whisper-base) via `@huggingface/transformers` |
+| LLM    | Llama 3.2 1B Instruct, q4f16_1 | ~700 MB | [`mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC`](https://huggingface.co/mlc-ai/Llama-3.2-1B-Instruct-q4f16_1-MLC) via `@mlc-ai/web-llm` |
 
-## VRAM strategy: fp16
+All three run concurrently as Web Workers on a single WebGPU device. After the first load, weights are cached in IndexedDB.
 
-The published ONNX is fp32 (~1.4&nbsp;GB) which exceeds typical WebGPU single-buffer caps. We convert it once, in CI, to fp16 with [`onnxconverter-common`](https://github.com/microsoft/onnxconverter-common):
+## How "talk to a video" actually works
 
-- **~720 MB on disk and resident** (half of fp32).
-- **Effectively lossless** for ViT inference vs fp32 — fp16 is the standard inference dtype for vision transformers; we did not pick int8/q4 because static quantization for video transformers requires calibration data and can shave 1–3% top-1 on classification heads.
+V-JEPA2 is a video encoder, not a multimodal LLM. There is no trained projector from V-JEPA2's 1024-dim features into Llama's embedding space — that would require a real training run on video-instruction data.
 
-The conversion runs in a GitHub Actions workflow ([.github/workflows/build-fp16.yml](.github/workflows/build-fp16.yml)) and publishes `model.fp16.onnx` as a release asset on the `model-fp16-v1` tag. The browser fetches the release asset directly.
+So we keep this honest and browser-feasible by **bridging through text**:
+
+1. V-JEPA2 (Diving48 head) classifies 32 uniformly sampled frames, producing top-5 class predictions with probabilities.
+2. Whisper transcribes the audio track.
+3. Both are injected as a single `system` message into Llama 3.2 1B.
+4. The user chats; Llama answers grounded in those observations.
+
+This means the chat is only as good as the action labels (Diving48 has 48 categories — somersaults, twists, body positions). For non-diving footage you'll get nonsense action labels, but the audio transcript still works and Llama knows to say it can't tell.
+
+## VRAM
+
+- Vision fp16: ~720 MB resident
+- Whisper q8: ~150 MB
+- Llama q4f16: ~700 MB
+- Total: ~1.6 GB GPU; works on 4 GB+ GPUs.
+
+fp16 was chosen for V-JEPA2 over int8/q4 because static quantization on a video ViT classification head can lose 1–3% top-1 without calibration data, and the user constraint was "no function loss." fp16 is effectively lossless for ViT inference.
 
 ## Run locally
 
@@ -25,28 +43,22 @@ node serve.js
 # open http://localhost:8787
 ```
 
-Requires a browser with WebGPU (Chrome/Edge, Safari TP, Firefox with `dom.webgpu.enabled`).
-
-## Build the fp16 weights yourself
-
-```
-py -3 -m pip install onnx onnxconverter-common huggingface_hub hf_transfer
-hf download onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX onnx/model.onnx --local-dir models_dl
-mkdir -p models && mv models_dl/onnx/model.onnx models/model.onnx
-py -3 scripts/convert_fp16.py
-```
+Requires Chrome/Edge with WebGPU (or Firefox with `dom.webgpu.enabled`, Safari TP).
 
 ## Files
 
 | Path | Purpose |
 |---|---|
-| `public/index.html` | Single-page WebGPU inference (frame extraction + ORT Web + softmax + top-5) |
-| `serve.js` | Minimal Node static server with COOP/COEP headers |
+| `public/index.html` | UI: video upload, three workers, chat |
+| `public/worker-vision.js` | V-JEPA2 ONNX inference (onnxruntime-web + WebGPU) |
+| `public/worker-asr.js` | Whisper via `@huggingface/transformers` |
+| `public/worker-llm.js` | Llama 3.2 1B via `@mlc-ai/web-llm` |
+| `serve.js` | Minimal Node static server with COOP/COEP |
 | `scripts/convert_fp16.py` | fp32 → fp16 ONNX conversion |
 | `.github/workflows/build-fp16.yml` | CI conversion + release publish |
-| `test.js` | Minimal integration test |
+| `test.js` | Sanity asserts |
 
-## Inputs / outputs
+## Vision inputs / outputs
 
-- Input: `[1, 32, 3, 256, 256]` fp16, ImageNet-normalized (mean `[0.485,0.456,0.406]`, std `[0.229,0.224,0.225]`), 32 frames sampled uniformly across the video duration.
-- Output: `[1, 48]` logits over Diving48 classes (id2label in `config.json`).
+- Input: `[1, 32, 3, 256, 256]` fp16, ImageNet-normalized, 32 frames sampled uniformly across video duration.
+- Output: `[1, 48]` logits over Diving48 classes; softmax + top-5 for the chat context.

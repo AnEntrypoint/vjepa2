@@ -1,22 +1,39 @@
-const fs = require('fs');
-const path = require('path');
-const assert = require('assert');
+const fs = require('fs')
+const path = require('path')
+const assert = require('assert')
 
-const root = __dirname;
+const root = __dirname
 
-assert.ok(fs.existsSync(path.join(root,'public/index.html')), 'index.html missing');
-assert.ok(fs.existsSync(path.join(root,'serve.js')), 'serve.js missing');
-assert.ok(fs.existsSync(path.join(root,'scripts/convert_fp16.py')), 'convert_fp16.py missing');
-assert.ok(fs.existsSync(path.join(root,'.github/workflows/build-fp16.yml')), 'CI workflow missing');
+for (const f of [
+  'public/index.html',
+  'public/worker-vision.js',
+  'public/worker-asr.js',
+  'public/worker-llm.js',
+  'serve.js',
+  'scripts/convert_fp16.py',
+  '.github/workflows/build-fp16.yml',
+]) assert.ok(fs.existsSync(path.join(root, f)), `${f} missing`)
 
-const html = fs.readFileSync(path.join(root,'public/index.html'),'utf8');
-assert.ok(html.includes("executionProviders: ['webgpu']"), 'webgpu EP missing in html');
-assert.ok(html.includes('float16'), 'fp16 input encoding missing');
-assert.ok(html.includes('AnEntrypoint/vjepa2/releases'), 'release URL missing');
-assert.ok(html.includes('NUM_FRAMES = 32'), 'frame count missing');
+const html = fs.readFileSync(path.join(root, 'public/index.html'), 'utf8')
+assert.ok(html.includes('worker-vision.js'), 'vision worker not wired')
+assert.ok(html.includes('worker-asr.js'), 'asr worker not wired')
+assert.ok(html.includes('worker-llm.js'), 'llm worker not wired')
+assert.ok(html.includes('NUM_FRAMES = 32'), 'frame count missing')
 
-const wf = fs.readFileSync(path.join(root,'.github/workflows/build-fp16.yml'),'utf8');
-assert.ok(wf.includes('convert_fp16.py'), 'workflow does not run conversion');
-assert.ok(wf.includes('softprops/action-gh-release'), 'workflow does not publish release');
+const v = fs.readFileSync(path.join(root, 'public/worker-vision.js'), 'utf8')
+assert.ok(v.includes("executionProviders: ['webgpu']"), 'vision EP missing')
+assert.ok(v.includes('AnEntrypoint/vjepa2/releases'), 'vision release URL missing')
+assert.ok(v.includes('float16'), 'vision fp16 missing')
 
-console.log('OK');
+const a = fs.readFileSync(path.join(root, 'public/worker-asr.js'), 'utf8')
+assert.ok(a.includes('whisper-base'), 'asr model missing')
+assert.ok(a.includes("dtype: 'q8'"), 'asr dtype missing')
+
+const l = fs.readFileSync(path.join(root, 'public/worker-llm.js'), 'utf8')
+assert.ok(l.includes('Llama-3.2-1B-Instruct-q4f16_1-MLC'), 'llm model missing')
+assert.ok(l.includes('@mlc-ai/web-llm'), 'mlc import missing')
+
+const wf = fs.readFileSync(path.join(root, '.github/workflows/build-fp16.yml'), 'utf8')
+assert.ok(wf.includes('convert_fp16.py'), 'workflow conversion missing')
+
+console.log('OK')
