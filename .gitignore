@@ -1,0 +1,14 @@
+.gm-stop-verified
+.gm/
+.codeinsight/
+models/
+models_dl/
+node_modules/
+*.onnx
+rs-learn.db
+.plugkit-browser-profile/
+.plugkit-browser-profile-*/
+.plugkit-agent-worktree/
+.code-search/
+.codeinsight
+*.stackdump

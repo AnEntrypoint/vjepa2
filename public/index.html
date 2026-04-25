@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>V-JEPA2 WebGPU</title>
+<style>
+  body{font:14px system-ui;margin:24px;max-width:880px}
+  #log{white-space:pre-wrap;background:#111;color:#0f0;padding:12px;border-radius:6px;font:12px ui-monospace,monospace;max-height:380px;overflow:auto}
+  button,input,select{font:14px system-ui;padding:8px 12px}
+  .row{display:flex;gap:12px;align-items:center;margin:12px 0;flex-wrap:wrap}
+  video{max-width:480px;display:block;background:#000}
+  .bar{height:14px;background:#3b82f6;border-radius:3px}
+  .pred{display:grid;grid-template-columns:280px 1fr 60px;gap:6px;align-items:center;margin:2px 0;font:12px ui-monospace,monospace}
+  .small{font-size:12px;color:#666}
+</style>
+</head>
+<body>
+<h1>V-JEPA2 ViT-L (diving48) — WebGPU</h1>
+<p class="small">
+  Source: <a href="https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX">onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX</a>.
+  fp16 weights served from this repo's GitHub release (~720&nbsp;MB) for halved VRAM with effectively no accuracy loss vs fp32.
+</p>
+<div class="row">
+  <input id="file" type="file" accept="video/*">
+  <button id="run" disabled>Classify</button>
+  <span id="status">loading…</span>
+</div>
+<video id="vid" controls muted playsinline></video>
+<div id="preds"></div>
+<h3>Log</h3>
+<pre id="log"></pre>
+
+<script type="module">
+import * as ort from 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.webgpu.bundle.min.mjs';
+
+const $ = id => document.getElementById(id);
+const log = (...a)=>{const s=a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' ');$('log').textContent+=s+'\n';$('log').scrollTop=1e9;console.log(...a);};
+const setStatus = s => $('status').textContent = s;
+
+window.__debug = { ort, session: null, config: null, lastInput: null, lastOutput: null };
+
+ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/';
+
+const RELEASE = 'https://github.com/AnEntrypoint/vjepa2/releases/download/model-fp16-v1';
+const HF      = 'https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/resolve/main';
+const MODEL_URL  = `${RELEASE}/model.fp16.onnx`;
+const CONFIG_URL = `${RELEASE}/config.json`;
+const FALLBACK_CONFIG = `${HF}/config.json`;
+
+const NUM_FRAMES = 32;
+const SIZE = 256;
+const RESIZE_SHORT = 292;
+const MEAN = [0.485, 0.456, 0.406];
+const STD  = [0.229, 0.224, 0.225];
+
+if (!('gpu' in navigator)) { setStatus('WebGPU not available in this browser'); throw new Error('no webgpu'); }
+
+setStatus('fetching config…');
+let config;
+try { config = await (await fetch(CONFIG_URL)).json(); }
+catch { config = await (await fetch(FALLBACK_CONFIG)).json(); }
+window.__debug.config = config;
+log('classes:', Object.keys(config.id2label).length);
+
+setStatus('downloading fp16 weights (~720 MB, cached after first run)…');
+const t0 = performance.now();
+const session = await ort.InferenceSession.create(MODEL_URL, {
+  executionProviders: ['webgpu'],
+  graphOptimizationLevel: 'all',
+});
+window.__debug.session = session;
+log(`session ready in ${((performance.now()-t0)/1000).toFixed(1)}s`);
+log('inputs:', session.inputNames, 'outputs:', session.outputNames);
+setStatus('ready — pick a video');
+$('run').disabled = false;
+
+$('file').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('vid').src = URL.createObjectURL(f);
+};
+
+async function extractFrames(video){
+  await video.play().catch(()=>{});
+  video.pause();
+  const dur = video.duration;
+  if (!isFinite(dur) || dur <= 0) throw new Error('video duration unknown');
+  const c = document.createElement('canvas');
+  c.width = SIZE; c.height = SIZE;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const frames = new Float32Array(NUM_FRAMES * 3 * SIZE * SIZE);
+  const stride = SIZE * SIZE;
+  const planeSize = 3 * stride;
+  for (let i = 0; i < NUM_FRAMES; i++){
+    const t = (i + 0.5) * dur / NUM_FRAMES;
+    await new Promise(res => { video.onseeked = res; video.currentTime = Math.min(t, dur - 0.01); });
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const scale = RESIZE_SHORT / Math.min(vw, vh);
+    const sw = vw * scale, sh = vh * scale;
+    const dx = (SIZE - sw) / 2, dy = (SIZE - sh) / 2;
+    ctx.fillStyle = '#000'; ctx.fillRect(0,0,SIZE,SIZE);
+    ctx.drawImage(video, dx, dy, sw, sh);
+    const img = ctx.getImageData(0,0,SIZE,SIZE).data;
+    const base = i * planeSize;
+    for (let p = 0, j = 0; p < img.length; p += 4, j++){
+      frames[base + 0*stride + j] = (img[p  ]/255 - MEAN[0]) / STD[0];
+      frames[base + 1*stride + j] = (img[p+1]/255 - MEAN[1]) / STD[1];
+      frames[base + 2*stride + j] = (img[p+2]/255 - MEAN[2]) / STD[2];
+    }
+    setStatus(`frame ${i+1}/${NUM_FRAMES}`);
+  }
+  return frames;
+}
+
+function topK(arr, k){
+  return Array.from(arr).map((v,i)=>[v,i]).sort((a,b)=>b[0]-a[0]).slice(0,k);
+}
+function softmax(a){
+  let m = -Infinity; for (const x of a) if (x>m) m=x;
+  let s = 0; const out = new Float32Array(a.length);
+  for (let i=0;i<a.length;i++){ out[i]=Math.exp(a[i]-m); s+=out[i]; }
+  for (let i=0;i<a.length;i++) out[i]/=s;
+  return out;
+}
+
+$('run').onclick = async () => {
+  $('run').disabled = true; $('preds').innerHTML = '';
+  try {
+    setStatus('extracting frames…');
+    const t1 = performance.now();
+    const frames = await extractFrames($('vid'));
+    log(`frames extracted in ${((performance.now()-t1)/1000).toFixed(2)}s`);
+
+    const inputName = session.inputNames[0];
+    const f16 = new Uint16Array(frames.length);
+    for (let i=0;i<frames.length;i++) f16[i] = f32ToF16(frames[i]);
+    const tensor = new ort.Tensor('float16', f16, [1, NUM_FRAMES, 3, SIZE, SIZE]);
+    window.__debug.lastInput = tensor;
+
+    setStatus('inference…');
+    const t2 = performance.now();
+    const out = await session.run({ [inputName]: tensor });
+    const dt = ((performance.now()-t2)/1000).toFixed(2);
+    log(`inference ${dt}s`);
+    const logits = out[session.outputNames[0]];
+    window.__debug.lastOutput = logits;
+
+    const data = logits.type === 'float16' ? f16ArrayToF32(logits.data) : logits.data;
+    const probs = softmax(data);
+    const top = topK(probs, 5);
+    const div = $('preds');
+    for (const [p, i] of top){
+      const label = config.id2label[i] ?? `class ${i}`;
+      const row = document.createElement('div'); row.className = 'pred';
+      row.innerHTML = `<span>${label}</span><div class="bar" style="width:${(p*100).toFixed(1)}%"></div><span>${(p*100).toFixed(1)}%</span>`;
+      div.appendChild(row);
+    }
+    setStatus('done');
+  } catch (err){
+    log('ERROR:', err.message);
+    setStatus('error');
+  } finally {
+    $('run').disabled = false;
+  }
+};
+
+function f32ToF16(val){
+  const f = new Float32Array(1); f[0] = val;
+  const u = new Uint32Array(f.buffer)[0];
+  const sign = (u >>> 16) & 0x8000;
+  let exp = (u >>> 23) & 0xff;
+  let mant = u & 0x7fffff;
+  if (exp === 0xff) return sign | 0x7c00 | (mant ? 1 : 0);
+  exp = exp - 127 + 15;
+  if (exp >= 0x1f) return sign | 0x7c00;
+  if (exp <= 0){
+    if (exp < -10) return sign;
+    mant = (mant | 0x800000) >>> (1 - exp);
+    return sign | (mant >>> 13);
+  }
+  return sign | (exp << 10) | (mant >>> 13);
+}
+function f16ToF32(h){
+  const sign = (h & 0x8000) << 16;
+  const exp = (h & 0x7c00) >>> 10;
+  const mant = h & 0x3ff;
+  let f;
+  if (exp === 0) f = mant === 0 ? 0 : Math.pow(2,-14) * (mant/1024);
+  else if (exp === 0x1f) f = mant ? NaN : Infinity;
+  else f = Math.pow(2, exp-15) * (1 + mant/1024);
+  return sign ? -f : f;
+}
+function f16ArrayToF32(u16){
+  const out = new Float32Array(u16.length);
+  for (let i=0;i<u16.length;i++) out[i] = f16ToF32(u16[i]);
+  return out;
+}
+</script>
+</body>
+</html>

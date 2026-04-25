@@ -1,0 +1,59 @@
+name: build-fp16-model
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - scripts/convert_fp16.py
+      - .github/workflows/build-fp16.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          pip install --quiet huggingface_hub hf_transfer onnx onnxconverter-common
+
+      - name: Download fp32 ONNX
+        env:
+          HF_HUB_ENABLE_HF_TRANSFER: '1'
+        run: |
+          mkdir -p models
+          hf download onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX onnx/model.onnx --local-dir models_dl
+          mv models_dl/onnx/model.onnx models/model.onnx
+          ls -la models/
+
+      - name: Convert to fp16
+        run: |
+          python scripts/convert_fp16.py
+          ls -la models/
+
+      - name: Fetch configs
+        run: |
+          curl -sL -o models/config.json https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/resolve/main/config.json
+          curl -sL -o models/video_preprocessor_config.json https://huggingface.co/onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/resolve/main/video_preprocessor_config.json
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: model-fp16-v1
+          name: V-JEPA2 ViT-L diving48 fp16
+          body: |
+            fp16 conversion of `onnx-community/vjepa2-vitl-fpc32-256-diving48-ONNX/onnx/model.onnx`.
+            Converted with `onnxconverter-common.float16.convert_float_to_float16` (keep_io_types=false).
+            Use the fp16 model directly in onnxruntime-web with the WebGPU EP.
+          files: |
+            models/model.fp16.onnx
+            models/config.json
+            models/video_preprocessor_config.json
